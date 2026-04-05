@@ -339,10 +339,11 @@ async function handleChat(jid, phone, userText, session) {
       session.produitEnAttente = null;
       console.log(`🛒 Panier ${phone}:`, session.panier.map(p => p.nom));
 
-      await sendOptions(jid,
-        `✨ Ajouté au panier !\n\n🛒 *Ton panier :*\n${formatPanier(session.panier)}\n\nTu veux ajouter autre chose ?`,
-        [{ title: "Oui, j'ajoute" }, { title: 'Non, je finalise' }]
+      const panierTxt = formatPanier(session.panier);
+      const addMsg = await minaAsk(jid, session,
+        `${item.nom} vient d'être ajouté au panier ! Le panier actuel :\n${panierTxt}\nDemande si elle veut ajouter autre chose ou passer à la commande. Sois enthousiaste !`
       );
+      await sendText(jid, addMsg || `✨ Ajouté au panier !\n\n🛒 Ton panier :\n${panierTxt}\n\nTu veux ajouter autre chose ou on passe à la commande ? 💕`);
       session.state = ADD_MORE;
 
     } else if (action === 'DEMANDER_CONFIRMATION' && produit_nom) {
@@ -361,10 +362,43 @@ async function handleChat(jid, phone, userText, session) {
   }
 }
 
+// Helper : Mina génère un message naturel selon une instruction
+async function minaAsk(jid, session, instruction) {
+  try {
+    const res = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content:
+            `Tu es Mina 🌸, conseillère beauté girly et chaleureuse de Tinkerbells. ` +
+            `Tu parles comme une vraie copine. Tu utilises des emojis avec naturel. ` +
+            `Génère UN message court et naturel selon l'instruction. ` +
+            `IMPORTANT : si tu demandes une info à écrire, précise toujours gentiment d'écrire à la main (pas de message vocal). ` +
+            `Réponds UNIQUEMENT avec le texte du message, rien d'autre.`,
+        },
+        ...session.history.slice(-10),
+        { role: 'user', content: `[INSTRUCTION INTERNE] ${instruction}` },
+      ],
+    });
+    return res.choices[0].message.content.trim();
+  } catch {
+    return null;
+  }
+}
+
+function isValidPhone(phone) {
+  // Accepte formats algériens (05/06/07...) et français (+33/0033/06/07)
+  const cleaned = phone.replace(/[\s.\-()]/g, '');
+  return /^(\+?213|0)(5|6|7)\d{8}$/.test(cleaned) ||
+         /^(\+?33|0)(6|7)\d{8}$/.test(cleaned) ||
+         /^\d{9,15}$/.test(cleaned);
+}
+
 async function handleAddMore(jid, userText, session) {
   const t = userText.toLowerCase();
   const yes = ['1', 'oui', 'ajoute', 'autre', 'yes', 'wah', 'bghit'].some(w => t.includes(w));
-  const no  = ['2', 'non', 'finalise', 'no'].some(w => t.includes(w));
+  const no  = ['2', 'non', 'finalise', 'commander', 'passer', 'caisse'].some(w => t.includes(w));
 
   let addMore = yes;
 
@@ -373,7 +407,7 @@ async function handleAddMore(jid, userText, session) {
       const check = await openai.chat.completions.create({
         model: 'gpt-4o',
         messages: [
-          { role: 'system', content: 'Réponds uniquement en JSON: {"add_more": true} si le message indique que la personne veut ajouter autre chose, {"add_more": false} si elle veut finaliser.' },
+          { role: 'system', content: 'Réponds uniquement en JSON: {"add_more": true} si la personne veut ajouter autre chose, {"add_more": false} si elle veut finaliser/commander.' },
           { role: 'user', content: userText },
         ],
         response_format: { type: 'json_object' },
@@ -383,59 +417,99 @@ async function handleAddMore(jid, userText, session) {
   }
 
   if (addMore) {
-    await sendText(jid, 'Super ! 🌸 Qu\'est-ce que tu veux ajouter ?');
+    const msg = await minaAsk(jid, session, 'La cliente veut ajouter autre chose à son panier. Demande-lui ce qu\'elle veut ajouter.');
+    await sendText(jid, msg || 'Super ! 🌸 Dis-moi ce que tu veux ajouter !');
     session.state = CHAT;
   } else {
-    await sendText(jid, 'Parfait ! 📝 Ton prénom ? 👤');
+    const msg = await minaAsk(jid, session, 'La cliente veut finaliser sa commande. Dis-lui que tu vas avoir besoin de quelques infos pour la livraison, et commence par demander son prénom — en précisant d\'écrire à la main (pas de vocal).');
+    await sendText(jid, msg || 'Super ! 🌸 Pour la livraison, j\'ai besoin de quelques infos ✍️\nCommence par me donner ton prénom (écris à la main stp, pas de vocal pour les infos) 👤');
     session.state = GET_PRENOM;
   }
 }
 
 async function handleGetPrenom(jid, userText, session) {
+  if (!userText.trim() || userText.trim().length < 2) {
+    const msg = await minaAsk(jid, session, 'La cliente n\'a pas donné un prénom valide. Redemande-lui son prénom gentiment, en précisant d\'écrire à la main.');
+    await sendText(jid, msg || 'Oops 🌸 Tu peux m\'écrire ton prénom ? (juste le texte, pas de vocal stp)');
+    return;
+  }
   session.prenom = userText.trim();
-  await sendText(jid, 'Ton nom ? 👤');
+  const msg = await minaAsk(jid, session, `La cliente s'appelle ${session.prenom}. Utilise son prénom et demande-lui son nom de famille maintenant — rappelle d'écrire à la main.`);
+  await sendText(jid, msg || `Merci ${session.prenom} 💕 Et ton nom de famille ? (en texte stp) 👤`);
   session.state = GET_NOM;
 }
 
 async function handleGetNom(jid, userText, session) {
+  if (!userText.trim() || userText.trim().length < 2) {
+    const msg = await minaAsk(jid, session, 'La cliente n\'a pas donné un nom valide. Redemande gentiment son nom de famille, en précisant d\'écrire à la main.');
+    await sendText(jid, msg || 'Je n\'ai pas bien saisi ton nom 🌸 Tu peux me l\'écrire ? (pas de vocal stp)');
+    return;
+  }
   session.nom = userText.trim();
-  await sendText(jid, 'Ton numéro de téléphone ? 📱');
+  const msg = await minaAsk(jid, session, `Nom enregistré : ${session.nom}. Demande maintenant son numéro de téléphone pour la livraison — rappelle d'écrire à la main et donne un exemple de format (ex: 0612345678).`);
+  await sendText(jid, msg || 'Super ! 📱 Ton numéro de téléphone maintenant ? (écris-le en chiffres stp, ex: 0612345678)');
   session.state = GET_PHONE;
 }
 
 async function handleGetPhone(jid, userText, session) {
-  session.phoneClient = userText.trim();
-  await sendText(jid, 'Ta wilaya ? 🗺️');
+  const num = userText.trim();
+  if (!isValidPhone(num)) {
+    const msg = await minaAsk(jid, session, `La cliente a entré "${num}" comme numéro de téléphone mais ce n'est pas un numéro valide. Explique-lui gentiment et redemande un numéro correct (ex: 0612345678 ou 0555123456), en rappelant d'écrire à la main.`);
+    await sendText(jid, msg || `Hmm ce numéro ne semble pas correct 🌸 Tu peux me redonner ton numéro de téléphone ? (ex: 0612345678)`);
+    return;
+  }
+  session.phoneClient = num;
+  const msg = await minaAsk(jid, session, 'Numéro de téléphone enregistré. Demande maintenant sa wilaya (ville/région) pour la livraison — rappelle d\'écrire à la main.');
+  await sendText(jid, msg || 'Parfait ! 🗺️ Ta wilaya ? (écris-la stp, pas de vocal)');
   session.state = GET_WILAYA;
 }
 
 async function handleGetWilaya(jid, userText, session) {
+  if (!userText.trim() || userText.trim().length < 2) {
+    const msg = await minaAsk(jid, session, 'La cliente n\'a pas donné une wilaya valide. Redemande gentiment.');
+    await sendText(jid, msg || 'Je n\'ai pas bien saisi ta wilaya 🌸 Tu peux me l\'écrire ?');
+    return;
+  }
   session.wilaya = userText.trim();
-  await sendText(jid, 'Ta commune ? 🏘️');
+  const msg = await minaAsk(jid, session, `Wilaya : ${session.wilaya}. Demande maintenant sa commune (quartier/ville précise) — rappelle d'écrire à la main.`);
+  await sendText(jid, msg || 'Et ta commune ? 🏘️ (en texte stp)');
   session.state = GET_COMMUNE;
 }
 
 async function handleGetCommune(jid, userText, session) {
+  if (!userText.trim() || userText.trim().length < 2) {
+    const msg = await minaAsk(jid, session, 'La cliente n\'a pas donné une commune valide. Redemande gentiment.');
+    await sendText(jid, msg || 'Tu peux me préciser ta commune ? 🌸 (en texte stp)');
+    return;
+  }
   session.commune = userText.trim();
   const { panier } = session;
+  const total = panier.reduce((s, i) => s + i.prix, 0);
 
-  const recap =
-    `📋 Récapitulatif de ta commande :\n\n` +
-    `🛒 Produits :\n${formatPanier(panier)}\n\n` +
+  // Recap produits
+  const produitsTxt = panier.map(i => `• ${i.nom} (${i.brand}) — ${i.prix} DA`).join('\n');
+
+  const recapData =
+    `🛒 Commande :\n${produitsTxt}\n💰 Total : ${total} DA\n\n` +
     `👤 Prénom : ${session.prenom}\n` +
     `👤 Nom : ${session.nom}\n` +
     `📱 Téléphone : ${session.phoneClient}\n` +
     `🗺️ Wilaya : ${session.wilaya}\n` +
     `🏘️ Commune : ${session.commune}`;
 
-  await sendOptions(jid, recap, [{ title: '✅ CONFIRMER' }, { title: '❌ ANNULER' }]);
+  const msg = await minaAsk(jid, session,
+    `Toutes les infos sont collectées. Fais un récapitulatif complet et chaleureux de la commande avec ces données :\n${recapData}\n\nEnsuite demande si tout est correct et si elle veut confirmer sa commande. Sois naturelle et enthousiaste !`
+  );
+  await sendText(jid, msg ||
+    `📋 Voici le récap de ta commande :\n\n${recapData}\n\nTout est correct ? Tu confirmes ta commande ? 🌸`
+  );
   session.state = CONFIRM_ORDER;
 }
 
 async function handleConfirmOrder(jid, phone, userText, session) {
   const t = userText.toLowerCase();
-  const yes = ['1', 'confirmer', 'confirme', 'oui', 'yes', 'ok', 'wah'].some(w => t.includes(w));
-  const no  = ['2', 'annuler', 'non', 'no'].some(w => t.includes(w));
+  const yes = ['confirmer', 'confirme', 'oui', 'yes', 'ok', 'wah', 'c bon', 'correct', 'parfait', 'go'].some(w => t.includes(w));
+  const no  = ['annuler', 'annule', 'non', 'no', 'pas', 'arrête', 'stop'].some(w => t.includes(w));
 
   let confirmed = yes;
 
@@ -444,7 +518,7 @@ async function handleConfirmOrder(jid, phone, userText, session) {
       const check = await openai.chat.completions.create({
         model: 'gpt-4o',
         messages: [
-          { role: 'system', content: 'Réponds uniquement en JSON: {"confirmed": true} si le message confirme une commande, {"confirmed": false} sinon.' },
+          { role: 'system', content: 'Réponds uniquement en JSON: {"confirmed": true} si le message confirme une commande, {"confirmed": false} si elle annule ou hésite.' },
           { role: 'user', content: userText },
         ],
         response_format: { type: 'json_object' },
@@ -489,21 +563,25 @@ async function handleConfirmOrder(jid, phone, userText, session) {
       const adminMsg =
         `🛍️ NOUVELLE COMMANDE TINKERBELLS\n📅 ${now}\n\n` +
         `🛒 Produits :\n${itemsTxt}\n💰 Total : ${total} DA\n\n` +
-        `👤 Prénom : ${session.prenom}\n👤 Nom : ${session.nom}\n` +
-        `📱 Téléphone : ${session.phoneClient}\n` +
-        `🗺️ Wilaya : ${session.wilaya}\n🏘️ Commune : ${session.commune}`;
+        `👤 ${session.prenom} ${session.nom}\n` +
+        `📱 ${session.phoneClient}\n` +
+        `🗺️ ${session.wilaya} — ${session.commune}`;
       await sendText(ADMIN_PHONE + '@s.whatsapp.net', adminMsg);
     } catch (e) {
       console.error('Erreur notif admin:', e.message);
     }
 
-    await sendText(jid,
-      '🎉 Commande confirmée ! Merci pour ta confiance 🌸\n' +
-      'Notre équipe te contactera très bientôt pour la livraison.\n\n' +
-      'Tinkerbells — La beauté à votre portée ✨'
+    const msg = await minaAsk(jid, session,
+      `La commande est confirmée et enregistrée ! Envoie un message de confirmation chaleureux et girly à ${session.prenom}, dis-lui que l'équipe va la contacter bientôt pour la livraison. Sois enthousiaste et sincère !`
+    );
+    await sendText(jid, msg ||
+      `🎉 Commande confirmée ${session.prenom} ! Merci pour ta confiance 🌸\nNotre équipe te contactera très bientôt pour la livraison.\n\nTinkerbells — La beauté à votre portée ✨`
     );
   } else {
-    await sendText(jid, '❌ Commande annulée. Tu peux continuer à magasiner 🌸');
+    const msg = await minaAsk(jid, session,
+      'La cliente a annulé sa commande. Réagis avec compréhension, dis-lui que c\'est pas grave et qu\'elle peut revenir quand elle veut. Reste chaleureuse.'
+    );
+    await sendText(jid, msg || 'Pas de souci du tout 🌸 Ta commande est annulée. N\'hésite pas à revenir quand tu veux, je suis là 💕');
   }
 
   await resetSession(phone);
