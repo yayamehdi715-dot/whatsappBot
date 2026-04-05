@@ -17,9 +17,9 @@ from datetime import datetime
 # ─────────────────────────────────────────
 # 🔧 CONFIGURATION
 # ─────────────────────────────────────────
-WHATSAPP_TOKEN   = "TON_ACCESS_TOKEN_META"      # 👉 Token d'accès permanent Meta
-PHONE_NUMBER_ID  = "TON_PHONE_NUMBER_ID"        # 👉 ID du numéro WhatsApp Business
-VERIFY_TOKEN     = "tinkerbells_secret"          # 👉 Token de vérification webhook (choisis toi-même)
+WHATSAPP_TOKEN   = "EAALGmSRN1qYBRCpUGWRZBjbte9XAeLOUsCIPtbzwxrPZA4DUaOBH2HY4N9ZBO2WHyAVcnkCRflTfmsRBXPmjDAaxB6y6zOyXjfzjE8iLMr74Btpe9cMZBovPNygkZCnccZA96DRUp5AJ591mYhowqlM7kKBNlUlPkp4s7J0d2z3iHz7ztkGKVWdQyVb8HHpHaZAb75uFb1vc4V1CDTZBKXd4SL7pcauXhe1Vr15I0Qu7ZBrRiAv6SUOEGtlJMvF2NoGtfzlvur7RaAyq0T7mjrLS2"
+PHONE_NUMBER_ID  = "1086279481229668"
+VERIFY_TOKEN     = "tinkerbells_secret"
 ADMIN_PHONE      = "213XXXXXXXXX"               # 👉 Ton numéro WhatsApp admin (ex: 213771234567)
 DEEPSEEK_API_KEY = "sk-4b34a821f0164341a641155011e9b05d"
 
