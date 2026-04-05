@@ -4,7 +4,8 @@
  */
 
 import pkg from '@whiskeysockets/baileys';
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, Browsers } = pkg;
+const makeWASocket = pkg.default || pkg;
+const { useMultiFileAuthState, DisconnectReason, downloadMediaMessage, Browsers } = pkg;
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import { MongoClient, ObjectId } from 'mongodb';
