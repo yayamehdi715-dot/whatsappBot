@@ -4,6 +4,7 @@
 Installation : pip install flask openai pymongo requests
 """
 
+import os
 import logging
 import json
 import re
@@ -12,19 +13,17 @@ import tempfile
 from flask import Flask, request, jsonify
 from bson import ObjectId
 from openai import OpenAI
-from groq import Groq
 from pymongo import MongoClient
 from datetime import datetime
 
 # ─────────────────────────────────────────
 # 🔧 CONFIGURATION
 # ─────────────────────────────────────────
+OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY")
 WHATSAPP_TOKEN   = "EAALGmSRN1qYBRCuL1S8VzKxJh9b5aqNDtsoBRacfFVsmZAnfr1ceOg3w4MdPT4MFMKorB4ZBmOyyeJh3M1sFf3BEUIDmIwZC15gt3clJm3QrQIMBHLZC19XwZCTd1OU4WTH5aQVQXEZB5zzZA8eT4QuEwk8zPvSmUZCPE0D88AuLPv4DFxpwPCpRJIBue6VlXWWPEiAVZB5RhfeHADbLMzo2RGP8wgswMam5t2ThhZC7rCZCqcbZCNfKxbFssEzStcjuWepLhrG5VlXYjEG8gV4BYvEp"
 PHONE_NUMBER_ID  = "1086279481229668"
 VERIFY_TOKEN     = "tinkerbells_secret"
 ADMIN_PHONE      = "213761179379"
-DEEPSEEK_API_KEY = "sk-4b34a821f0164341a641155011e9b05d"
-GROQ_API_KEY     = "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"
 MONGO_URI        = "mongodb+srv://merahlwos_db_user:CytBm67mupWzabhy@cluster0.lpbytcq.mongodb.net/?appName=Cluster0"
 
 WA_API_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
@@ -44,8 +43,7 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 logger = logging.getLogger(__name__)
 
 app          = Flask(__name__)
-ai_client    = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
-groq_client  = Groq(api_key=GROQ_API_KEY)
+ai_client    = OpenAI(api_key=OPENAI_API_KEY)
 mongo        = MongoClient(MONGO_URI)
 db           = mongo["test"]
 products_col = db["products"]
@@ -121,8 +119,8 @@ def transcribe_audio(media_id: str) -> str | None:
             tmp_path = tmp.name
 
         with open(tmp_path, "rb") as audio_file:
-            transcript = groq_client.audio.transcriptions.create(
-                model="whisper-large-v3",
+            transcript = ai_client.audio.transcriptions.create(
+                model="whisper-1",
                 file=audio_file,
             )
         os.unlink(tmp_path)
@@ -301,7 +299,7 @@ def handle_chat(phone: str, user_text: str, session: dict):
 
     try:
         response = ai_client.chat.completions.create(
-            model="deepseek-chat",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": build_system_prompt(catalog)},
                 *history[-20:]
@@ -377,7 +375,7 @@ def handle_add_more(phone: str, user_text: str, session: dict):
         # Analyse IA si ce n'est pas un bouton connu
         try:
             check = ai_client.chat.completions.create(
-                model="deepseek-chat",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": 'Réponds uniquement en JSON: {"add_more": true} si le message indique que la personne veut ajouter autre chose, {"add_more": false} si elle veut finaliser.'},
                     {"role": "user", "content": user_text}
@@ -452,7 +450,7 @@ def handle_confirm_order(phone: str, user_text: str, session: dict):
     if not confirmed and user_text != "confirm_no":
         try:
             check = ai_client.chat.completions.create(
-                model="deepseek-chat",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": 'Réponds uniquement en JSON: {"confirmed": true} si le message confirme une commande, {"confirmed": false} sinon.'},
                     {"role": "user", "content": user_text}
