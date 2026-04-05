@@ -3,9 +3,9 @@
  * Utilise Baileys (WhatsApp Web) + OpenAI + MongoDB
  */
 
-import pkg from '@whiskeysockets/baileys';
-const makeWASocket = pkg.default || pkg;
-const { useMultiFileAuthState, DisconnectReason, downloadMediaMessage, Browsers } = pkg;
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, Browsers } = require('@whiskeysockets/baileys');
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import { MongoClient, ObjectId } from 'mongodb';
