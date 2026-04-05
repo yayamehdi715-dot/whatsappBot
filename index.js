@@ -3,12 +3,8 @@
  * Utilise Baileys (WhatsApp Web) + OpenAI + MongoDB
  */
 
-import makeWASocket, {
-  useMultiFileAuthState,
-  DisconnectReason,
-  downloadMediaMessage,
-  Browsers,
-} from '@whiskeysockets/baileys';
+import pkg from '@whiskeysockets/baileys';
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, Browsers } = pkg;
 import { Boom } from '@hapi/boom';
 import { MongoClient, ObjectId } from 'mongodb';
 import OpenAI from 'openai';
