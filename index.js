@@ -5,7 +5,7 @@
 
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, Browsers, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import { MongoClient, ObjectId } from 'mongodb';
@@ -516,32 +516,47 @@ async function handleConfirmOrder(jid, phone, userText, session) {
 // CONNEXION WHATSAPP AVEC BAILEYS
 // ─────────────────────────────────────────
 async function connectWhatsApp() {
+  // Récupérer la version WA la plus récente
+  const { version } = await fetchLatestBaileysVersion();
+  console.log(`📱 Version WhatsApp Web: ${version.join('.')}`);
+
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
   sock = makeWASocket({
+    version,
     auth:                           state,
-    browser:                        Browsers.macOS('Desktop'),
-    printQRInTerminal:              false,
+    browser:                        Browsers.ubuntu('Chrome'),
+    printQRInTerminal:              true,
     logger:                         pino({ level: 'silent' }),
     syncFullHistory:                false,
     generateHighQualityLinkPreview: false,
+    connectTimeoutMs:               60000,
+    defaultQueryTimeoutMs:          60000,
+    keepAliveIntervalMs:            30000,
   });
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
       currentQR = qr;
-      console.log('📱 QR code disponible — ouvre la page web du bot pour le scanner');
+      console.log('📱 QR code disponible — ouvre http://localhost:3000 pour le scanner');
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error instanceof Boom
         ? lastDisconnect.error.output.statusCode
         : 0;
-      const shouldReconnect = code !== DisconnectReason.loggedOut;
-      console.log('❌ Connexion fermée (code', code, '). Reconnexion:', shouldReconnect);
-      if (shouldReconnect) {
-        setTimeout(connectWhatsApp, 5000);
+      console.log('❌ Connexion fermée (code', code, ')');
+
+      if (code === 405) {
+        // Session corrompue — on efface et on recrée
+        console.log('🗑️ Session corrompue, suppression et reconnexion...');
+        fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+        setTimeout(connectWhatsApp, 3000);
+      } else if (code === DisconnectReason.loggedOut || code === 401) {
+        console.log('🔑 Déconnecté. Suppression de la session...');
+        fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+        setTimeout(connectWhatsApp, 3000);
       } else {
-        console.log('🔑 Déconnecté. Supprime le dossier auth_info_baileys et redémarre.');
+        setTimeout(connectWhatsApp, 5000);
       }
     } else if (connection === 'open') {
       currentQR = null;
