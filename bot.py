@@ -8,6 +8,8 @@ import logging
 import json
 import re
 import requests
+import tempfile
+import os
 from flask import Flask, request, jsonify
 from bson import ObjectId
 from openai import OpenAI
@@ -90,6 +92,44 @@ def send_buttons(to: str, body: str, buttons: list):
     r = requests.post(WA_API_URL, headers=WA_HEADERS, json=payload)
     if r.status_code != 200:
         logger.error(f"Erreur envoi boutons: {r.text}")
+
+# ─────────────────────────────────────────
+# 🎤 TRANSCRIPTION VOCALE (WHISPER)
+# ─────────────────────────────────────────
+
+def transcribe_audio(media_id: str) -> str | None:
+    """Télécharge un message vocal WhatsApp et le transcrit avec Whisper."""
+    try:
+        # 1. Récupérer l'URL du fichier audio
+        meta_url = f"https://graph.facebook.com/v19.0/{media_id}"
+        r = requests.get(meta_url, headers=WA_HEADERS)
+        if r.status_code != 200:
+            logger.error(f"Erreur récupération media: {r.text}")
+            return None
+        audio_url = r.json().get("url")
+
+        # 2. Télécharger le fichier audio
+        r2 = requests.get(audio_url, headers=WA_HEADERS)
+        if r2.status_code != 200:
+            logger.error("Erreur téléchargement audio")
+            return None
+
+        # 3. Sauvegarder temporairement et transcrire avec Whisper
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            tmp.write(r2.content)
+            tmp_path = tmp.name
+
+        with open(tmp_path, "rb") as audio_file:
+            transcript = ai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+            )
+        os.unlink(tmp_path)
+        return transcript.text
+
+    except Exception as e:
+        logger.error(f"Erreur transcription: {e}")
+        return None
 
 # ─────────────────────────────────────────
 # 🛍️ CATALOGUE
@@ -529,7 +569,7 @@ def receive_message():
         msg   = messages[0]
         phone = msg["from"]  # Numéro de l'expéditeur
 
-        # Extraire le texte (message texte ou bouton interactif)
+        # Extraire le texte (message texte, bouton interactif ou vocal)
         if msg["type"] == "text":
             user_text = msg["text"]["body"]
         elif msg["type"] == "interactive":
@@ -538,8 +578,14 @@ def receive_message():
                 user_text = interactive["button_reply"]["id"]
             else:
                 return jsonify({"status": "ok"}), 200
+        elif msg["type"] == "audio":
+            user_text = transcribe_audio(msg["audio"]["id"])
+            if not user_text:
+                send_text(phone, "Désolée, je n'ai pas pu comprendre ton message vocal 🌸 Tu peux réessayer ou écrire en texte ?")
+                return jsonify({"status": "ok"}), 200
+            logger.info(f"🎤 Transcription: {user_text}")
         else:
-            send_text(phone, "Je ne comprends que les messages texte pour l'instant 🌸")
+            send_text(phone, "Je comprends les messages texte et vocaux 🌸")
             return jsonify({"status": "ok"}), 200
 
         session = get_session(phone)
