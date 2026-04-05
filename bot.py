@@ -9,23 +9,25 @@ import json
 import re
 import requests
 import tempfile
-import os
 from flask import Flask, request, jsonify
 from bson import ObjectId
 from openai import OpenAI
+from groq import Groq
 from pymongo import MongoClient
 from datetime import datetime
 
 # ─────────────────────────────────────────
 # 🔧 CONFIGURATION
 # ─────────────────────────────────────────
-WHATSAPP_TOKEN   = "EAALGmSRN1qYBRCuL1S8VzKxJh9b5aqNDtsoBRacfFVsmZAnfr1ceOg3w4MdPT4MFMKorB4ZBmOyyeJh3M1sFf3BEUIDmIwZC15gt3clJm3QrQIMBHLZC19XwZCTd1OU4WTH5aQVQXEZB5zzZA8eT4QuEwk8zPvSmUZCPE0D88AuLPv4DFxpwPCpRJIBue6VlXWWPEiAVZB5RhfeHADbLMzo2RGP8wgswMam5t2ThhZC7rCZCqcbZCNfKxbFssEzStcjuWepLhrG5VlXYjEG8gV4BYvEp"
-PHONE_NUMBER_ID  = "1086279481229668"
-VERIFY_TOKEN     = "tinkerbells_secret"
-ADMIN_PHONE      = "213761179379"
-DEEPSEEK_API_KEY = "sk-4b34a821f0164341a641155011e9b05d"
+import os
 
-MONGO_URI = "mongodb+srv://merahlwos_db_user:CytBm67mupWzabhy@cluster0.lpbytcq.mongodb.net/?appName=Cluster0"
+WHATSAPP_TOKEN   = os.environ.get("WHATSAPP_TOKEN")
+PHONE_NUMBER_ID  = os.environ.get("PHONE_NUMBER_ID")
+VERIFY_TOKEN     = os.environ.get("VERIFY_TOKEN", "tinkerbells_secret")
+ADMIN_PHONE      = os.environ.get("ADMIN_PHONE")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+GROQ_API_KEY     = os.environ.get("GROQ_API_KEY")
+MONGO_URI        = os.environ.get("MONGO_URI")
 
 WA_API_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
 WA_HEADERS = {
@@ -45,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 app          = Flask(__name__)
 ai_client    = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+groq_client  = Groq(api_key=GROQ_API_KEY)
 mongo        = MongoClient(MONGO_URI)
 db           = mongo["test"]
 products_col = db["products"]
@@ -120,8 +123,8 @@ def transcribe_audio(media_id: str) -> str | None:
             tmp_path = tmp.name
 
         with open(tmp_path, "rb") as audio_file:
-            transcript = ai_client.audio.transcriptions.create(
-                model="whisper-1",
+            transcript = groq_client.audio.transcriptions.create(
+                model="whisper-large-v3",
                 file=audio_file,
             )
         os.unlink(tmp_path)
