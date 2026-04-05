@@ -25,7 +25,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // CONFIGURATION
 // ─────────────────────────────────────────
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const ADMIN_PHONE    = '213761179379';
+const ADMIN_PHONE    = '33761179379';
 const MONGO_URI      = 'mongodb+srv://merahlwos_db_user:CytBm67mupWzabhy@cluster0.lpbytcq.mongodb.net/?appName=Cluster0';
 
 // États de conversation
