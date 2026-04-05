@@ -19,15 +19,13 @@ from datetime import datetime
 # ─────────────────────────────────────────
 # 🔧 CONFIGURATION
 # ─────────────────────────────────────────
-import os
-
-WHATSAPP_TOKEN   = os.environ.get("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID  = os.environ.get("PHONE_NUMBER_ID")
-VERIFY_TOKEN     = os.environ.get("VERIFY_TOKEN", "tinkerbells_secret")
-ADMIN_PHONE      = os.environ.get("ADMIN_PHONE")
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
-GROQ_API_KEY     = os.environ.get("GROQ_API_KEY")
-MONGO_URI        = os.environ.get("MONGO_URI")
+WHATSAPP_TOKEN   = "EAALGmSRN1qYBRCuL1S8VzKxJh9b5aqNDtsoBRacfFVsmZAnfr1ceOg3w4MdPT4MFMKorB4ZBmOyyeJh3M1sFf3BEUIDmIwZC15gt3clJm3QrQIMBHLZC19XwZCTd1OU4WTH5aQVQXEZB5zzZA8eT4QuEwk8zPvSmUZCPE0D88AuLPv4DFxpwPCpRJIBue6VlXWWPEiAVZB5RhfeHADbLMzo2RGP8wgswMam5t2ThhZC7rCZCqcbZCNfKxbFssEzStcjuWepLhrG5VlXYjEG8gV4BYvEp"
+PHONE_NUMBER_ID  = "1086279481229668"
+VERIFY_TOKEN     = "tinkerbells_secret"
+ADMIN_PHONE      = "213761179379"
+DEEPSEEK_API_KEY = "sk-4b34a821f0164341a641155011e9b05d"
+GROQ_API_KEY     = "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"
+MONGO_URI        = "mongodb+srv://merahlwos_db_user:CytBm67mupWzabhy@cluster0.lpbytcq.mongodb.net/?appName=Cluster0"
 
 WA_API_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
 WA_HEADERS = {
