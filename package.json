@@ -1,0 +1,21 @@
+{
+  "name": "tinkerbells-whatsapp-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Bot WhatsApp Tinkerbells cosmetiques Algerie",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.16",
+    "@hapi/boom": "^10.0.1",
+    "mongodb": "^6.10.0",
+    "openai": "^4.77.0",
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
