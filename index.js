@@ -520,14 +520,11 @@ async function connectWhatsApp() {
 
   sock = makeWASocket({
     auth:                           state,
-    browser:                        ['Ubuntu', 'Chrome', '22.0.0'],
-    printQRInTerminal:              true,
+    browser:                        Browsers.macOS('Desktop'),
+    printQRInTerminal:              false,
     logger:                         pino({ level: 'silent' }),
     syncFullHistory:                false,
     generateHighQualityLinkPreview: false,
-    connectTimeoutMs:               60_000,
-    keepAliveIntervalMs:            10_000,
-    retryRequestDelayMs:            2_000,
   });
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
