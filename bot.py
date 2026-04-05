@@ -1,22 +1,15 @@
 """
-🌸 Tinkerbells — Bot Telegram E-commerce Cosmétiques Algérie
+🌸 Tinkerbells — Bot WhatsApp E-commerce Cosmétiques Algérie
 =============================================================
-Installation : pip install python-telegram-bot openai pymongo
+Installation : pip install flask openai pymongo requests
 """
 
 import logging
 import json
 import re
+import requests
+from flask import Flask, request, jsonify
 from bson import ObjectId
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ConversationHandler,
-    ContextTypes,
-    filters,
-)
 from openai import OpenAI
 from pymongo import MongoClient
 from datetime import datetime
@@ -24,12 +17,22 @@ from datetime import datetime
 # ─────────────────────────────────────────
 # 🔧 CONFIGURATION
 # ─────────────────────────────────────────
-TELEGRAM_TOKEN   = "8798994407:AAHg8H32FbWegSWVB2j9A7EUOfnLKp3V9rM"        # 👉 Token du bot client
-DEEPSEEK_API_KEY = "sk-4b34a821f0164341a641155011e9b05d"         # 👉 Clé DeepSeek
-ADMIN_BOT_TOKEN  = "8720072160:AAE7A7v6vOAV3ZbaHdBncuI1rVr6m3pHVL8"         # 👉 Token du bot admin
-ADMIN_CHAT_ID    = "5009172498"           # 👉 Ton chat ID Telegram
+WHATSAPP_TOKEN   = "TON_ACCESS_TOKEN_META"      # 👉 Token d'accès permanent Meta
+PHONE_NUMBER_ID  = "TON_PHONE_NUMBER_ID"        # 👉 ID du numéro WhatsApp Business
+VERIFY_TOKEN     = "tinkerbells_secret"          # 👉 Token de vérification webhook (choisis toi-même)
+ADMIN_PHONE      = "213XXXXXXXXX"               # 👉 Ton numéro WhatsApp admin (ex: 213771234567)
+DEEPSEEK_API_KEY = "sk-4b34a821f0164341a641155011e9b05d"
 
 MONGO_URI = "mongodb+srv://merahlwos_db_user:CytBm67mupWzabhy@cluster0.lpbytcq.mongodb.net/?appName=Cluster0"
+
+WA_API_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+WA_HEADERS = {
+    "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+    "Content-Type": "application/json",
+}
+
+# États de la conversation
+CHAT, ADD_MORE, GET_PRENOM, GET_NOM, GET_PHONE, GET_WILAYA, GET_COMMUNE, CONFIRM_ORDER = range(8)
 
 # ─────────────────────────────────────────
 # 🚀 INITIALISATION
@@ -38,13 +41,55 @@ MONGO_URI = "mongodb+srv://merahlwos_db_user:CytBm67mupWzabhy@cluster0.lpbytcq.m
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+app          = Flask(__name__)
 ai_client    = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 mongo        = MongoClient(MONGO_URI)
 db           = mongo["test"]
 products_col = db["products"]
 orders_col   = db["orders"]
 
-CHAT, ADD_MORE, GET_PRENOM, GET_NOM, GET_PHONE, GET_WILAYA, GET_COMMUNE, CONFIRM_ORDER = range(8)
+# Sessions en mémoire : { phone_number: { state, catalog, history, panier, ... } }
+sessions = {}
+
+# ─────────────────────────────────────────
+# 📤 ENVOI DE MESSAGES WHATSAPP
+# ─────────────────────────────────────────
+
+def send_text(to: str, text: str):
+    """Envoie un message texte simple."""
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {"body": text}
+    }
+    r = requests.post(WA_API_URL, headers=WA_HEADERS, json=payload)
+    if r.status_code != 200:
+        logger.error(f"Erreur envoi message: {r.text}")
+
+def send_buttons(to: str, body: str, buttons: list):
+    """
+    Envoie un message avec boutons interactifs (max 3).
+    buttons = [{"id": "btn_1", "title": "Oui"}, ...]
+    """
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": body},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": b["id"], "title": b["title"]}}
+                    for b in buttons
+                ]
+            }
+        }
+    }
+    r = requests.post(WA_API_URL, headers=WA_HEADERS, json=payload)
+    if r.status_code != 200:
+        logger.error(f"Erreur envoi boutons: {r.text}")
 
 # ─────────────────────────────────────────
 # 🛍️ CATALOGUE
@@ -77,15 +122,15 @@ def format_catalog(products: list) -> str:
 def find_product(catalog: list, name: str) -> dict | None:
     name_l = name.lower().strip()
     for p in catalog:
-        if p.get("name","").lower().strip() == name_l:
+        if p.get("name", "").lower().strip() == name_l:
             return p
     for p in catalog:
-        if name_l in p.get("name","").lower() or p.get("name","").lower() in name_l:
+        if name_l in p.get("name", "").lower() or p.get("name", "").lower() in name_l:
             return p
     words = set(name_l.split())
     best, best_score = None, 0
     for p in catalog:
-        score = len(words & set(p.get("name","").lower().split()))
+        score = len(words & set(p.get("name", "").lower().split()))
         if score > best_score:
             best_score, best = score, p
     return best if best_score >= 2 else None
@@ -154,27 +199,33 @@ RÈGLE ABSOLUE : Tu réponds UNIQUEMENT en JSON valide. Format strict :
 """
 
 # ─────────────────────────────────────────
-# 📩 DÉMARRAGE
+# 🔄 GESTION DES SESSIONS
 # ─────────────────────────────────────────
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    context.user_data["catalog"] = fetch_catalog()
-    context.user_data["history"] = []
-    context.user_data["panier"]  = []
-    await update.message.reply_text(
-        "🌸 Bienvenue chez Tinkerbells !\n\nJe suis Mina, votre conseillère beauté 💄\nComment puis-je vous aider ?",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return CHAT
+def get_session(phone: str) -> dict:
+    if phone not in sessions:
+        sessions[phone] = {
+            "state":              CHAT,
+            "catalog":            fetch_catalog(),
+            "history":            [],
+            "panier":             [],
+            "produit_en_attente": None,
+            "prenom": "", "nom": "", "phone_client": "", "wilaya": "", "commune": "",
+        }
+    return sessions[phone]
 
-async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    await update.message.reply_text("🔄 Conversation réinitialisée ! Envoyez /start.", reply_markup=ReplyKeyboardRemove())
-    return ConversationHandler.END
+def reset_session(phone: str):
+    sessions[phone] = {
+        "state":              CHAT,
+        "catalog":            fetch_catalog(),
+        "history":            [],
+        "panier":             [],
+        "produit_en_attente": None,
+        "prenom": "", "nom": "", "phone_client": "", "wilaya": "", "commune": "",
+    }
 
 # ─────────────────────────────────────────
-# 💬 CONVERSATION
+# 🧠 PARSING RÉPONSE IA
 # ─────────────────────────────────────────
 
 def parse_ai_response(raw: str) -> dict:
@@ -198,12 +249,13 @@ def parse_ai_response(raw: str) -> dict:
             "produit_prix": float(prix_match.group(1)) if prix_match else None,
         }
 
-async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+# ─────────────────────────────────────────
+# 💬 HANDLERS PAR ÉTAT
+# ─────────────────────────────────────────
 
-    catalog = context.user_data.get("catalog", [])
-    history = context.user_data.get("history", [])
+def handle_chat(phone: str, user_text: str, session: dict):
+    catalog = session["catalog"]
+    history = session["history"]
     history.append({"role": "user", "content": user_text})
 
     try:
@@ -223,17 +275,13 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prod_nom  = data.get("produit_nom")
         prod_prix = data.get("produit_prix")
 
-        # Produit déjà en attente de confirmation → force COMMANDER
-        if action == "DEMANDER_CONFIRMATION" and context.user_data.get("produit_en_attente") and prod_nom:
+        if action == "DEMANDER_CONFIRMATION" and session.get("produit_en_attente") and prod_nom:
             action = "COMMANDER"
 
         history.append({"role": "assistant", "content": raw})
-        context.user_data["history"] = history
+        session["history"] = history
 
-        try:
-            await update.message.reply_text(message, parse_mode="Markdown")
-        except Exception:
-            await update.message.reply_text(message)
+        send_text(phone, message)
 
         if action == "COMMANDER" and prod_nom:
             produit = find_product(catalog, prod_nom)
@@ -247,137 +295,138 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 item = {"id": None, "nom": prod_nom, "brand": "", "prix": prod_prix or 0}
 
-            # Ajoute au panier
-            panier = context.user_data.get("panier", [])
-            panier.append(item)
-            context.user_data["panier"] = panier
-            context.user_data["produit_en_attente"] = None
-            logger.info(f"🛒 Panier : {[p['nom'] for p in panier]}")
+            session["panier"].append(item)
+            session["produit_en_attente"] = None
+            logger.info(f"🛒 Panier {phone}: {[p['nom'] for p in session['panier']]}")
 
-            # Demande si le client veut ajouter autre chose
-            keyboard = [["✅ Non, je finalise ma commande"], ["🛍️ Oui, j'ajoute autre chose"]]
-            await update.message.reply_text(
-                f"✨ Ajouté au panier !\n\n🛒 *Ton panier :*\n{format_panier(panier)}\n\nTu veux ajouter autre chose ?",
-                parse_mode="Markdown",
-                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+            send_buttons(
+                phone,
+                f"✨ Ajouté au panier !\n\n🛒 *Ton panier :*\n{format_panier(session['panier'])}\n\nTu veux ajouter autre chose ?",
+                [
+                    {"id": "add_more_yes", "title": "🛍️ Oui, j'ajoute"},
+                    {"id": "add_more_no",  "title": "✅ Non, je finalise"},
+                ]
             )
-            return ADD_MORE
+            session["state"] = ADD_MORE
 
         elif action == "DEMANDER_CONFIRMATION" and prod_nom:
             produit = find_product(catalog, prod_nom)
             if produit:
-                context.user_data["produit_en_attente"] = {
+                session["produit_en_attente"] = {
                     "id":    produit["_id"],
                     "nom":   produit["name"],
                     "brand": produit.get("brand", ""),
                     "prix":  produit.get("price", prod_prix or 0),
                 }
 
-        return CHAT
-
     except Exception as e:
-        logger.error(f"Erreur : {e}")
-        await update.message.reply_text("⚠️ Une erreur s'est produite, réessaie.")
-        return CHAT
+        logger.error(f"Erreur chat: {e}")
+        send_text(phone, "⚠️ Une erreur s'est produite, réessaie.")
 
-async def add_more(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Le client veut-il ajouter d'autres produits ?"""
-    user_text = update.message.text.lower()
 
-    # DeepSeek analyse si oui ou non
-    try:
-        check = ai_client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": 'Réponds uniquement en JSON: {"add_more": true} si le message indique que la personne veut ajouter autre chose, {"add_more": false} si elle veut finaliser.'},
-                {"role": "user", "content": user_text}
-            ],
-            response_format={"type": "json_object"}
-        )
-        result   = json.loads(check.choices[0].message.content)
-        add_more_flag = result.get("add_more", False)
-    except Exception:
-        add_more_flag = "ajoute" in user_text or "autre" in user_text or "oui" in user_text
+def handle_add_more(phone: str, user_text: str, session: dict):
+    # Gestion des boutons interactifs ET du texte libre
+    text_lower = user_text.lower()
+    add_more_flag = (
+        user_text in ("add_more_yes",) or
+        any(w in text_lower for w in ["oui", "ajoute", "autre", "yes", "wah", "bghit"])
+    )
+
+    if not add_more_flag and user_text not in ("add_more_no",):
+        # Analyse IA si ce n'est pas un bouton connu
+        try:
+            check = ai_client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": 'Réponds uniquement en JSON: {"add_more": true} si le message indique que la personne veut ajouter autre chose, {"add_more": false} si elle veut finaliser.'},
+                    {"role": "user", "content": user_text}
+                ],
+                response_format={"type": "json_object"}
+            )
+            result = json.loads(check.choices[0].message.content)
+            add_more_flag = result.get("add_more", False)
+        except Exception:
+            pass
 
     if add_more_flag:
-        await update.message.reply_text(
-            "Super ! 🌸 Qu'est-ce que tu veux ajouter ?",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return CHAT
+        send_text(phone, "Super ! 🌸 Qu'est-ce que tu veux ajouter ?")
+        session["state"] = CHAT
     else:
-        await update.message.reply_text(
-            "Parfait ! 📝 Ton prénom ? 👤",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return GET_PRENOM
+        send_text(phone, "Parfait ! 📝 Ton prénom ? 👤")
+        session["state"] = GET_PRENOM
 
-# ─────────────────────────────────────────
-# 📦 FORMULAIRE
-# ─────────────────────────────────────────
 
-async def get_prenom(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["prenom"] = update.message.text.strip()
-    await update.message.reply_text("Ton nom ? 👤")
-    return GET_NOM
+def handle_get_prenom(phone: str, user_text: str, session: dict):
+    session["prenom"] = user_text.strip()
+    send_text(phone, "Ton nom ? 👤")
+    session["state"] = GET_NOM
 
-async def get_nom(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["nom"] = update.message.text.strip()
-    await update.message.reply_text("Ton numéro de téléphone ? 📱")
-    return GET_PHONE
+def handle_get_nom(phone: str, user_text: str, session: dict):
+    session["nom"] = user_text.strip()
+    send_text(phone, "Ton numéro de téléphone ? 📱")
+    session["state"] = GET_PHONE
 
-async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["phone"] = update.message.text.strip()
-    await update.message.reply_text("Ta wilaya ? 🗺️")
-    return GET_WILAYA
+def handle_get_phone(phone: str, user_text: str, session: dict):
+    session["phone_client"] = user_text.strip()
+    send_text(phone, "Ta wilaya ? 🗺️")
+    session["state"] = GET_WILAYA
 
-async def get_wilaya(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["wilaya"] = update.message.text.strip()
-    await update.message.reply_text("Ta commune ? 🏘️")
-    return GET_COMMUNE
+def handle_get_wilaya(phone: str, user_text: str, session: dict):
+    session["wilaya"] = user_text.strip()
+    send_text(phone, "Ta commune ? 🏘️")
+    session["state"] = GET_COMMUNE
 
-async def get_commune(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["commune"] = update.message.text.strip()
-    d      = context.user_data
-    panier = d.get("panier", [])
+def handle_get_commune(phone: str, user_text: str, session: dict):
+    session["commune"] = user_text.strip()
+    panier = session.get("panier", [])
     total  = sum(item["prix"] for item in panier)
 
     recap = (
         f"📋 Récapitulatif de ta commande :\n\n"
         f"🛒 Produits :\n{format_panier(panier)}\n\n"
-        f"👤 Prénom : {d.get('prenom')}\n"
-        f"👤 Nom : {d.get('nom')}\n"
-        f"📱 Téléphone : {d.get('phone')}\n"
-        f"🗺️ Wilaya : {d.get('wilaya')}\n"
-        f"🏘️ Commune : {d.get('commune')}\n\n"
-        f"Tape CONFIRMER pour valider ou ANNULER pour annuler."
+        f"👤 Prénom : {session.get('prenom')}\n"
+        f"👤 Nom : {session.get('nom')}\n"
+        f"📱 Téléphone : {session.get('phone_client')}\n"
+        f"🗺️ Wilaya : {session.get('wilaya')}\n"
+        f"🏘️ Commune : {session.get('commune')}"
     )
-    await update.message.reply_text(recap)
-    return CONFIRM_ORDER
 
-async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    send_buttons(
+        phone,
+        recap,
+        [
+            {"id": "confirm_yes", "title": "✅ CONFIRMER"},
+            {"id": "confirm_no",  "title": "❌ ANNULER"},
+        ]
+    )
+    session["state"] = CONFIRM_ORDER
 
-    try:
-        check = ai_client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": 'Réponds uniquement en JSON: {"confirmed": true} si le message confirme une commande, {"confirmed": false} sinon.'},
-                {"role": "user", "content": user_text}
-            ],
-            response_format={"type": "json_object"}
-        )
-        result    = json.loads(check.choices[0].message.content)
-        confirmed = result.get("confirmed", False)
-    except Exception:
-        confirmed = False
+def handle_confirm_order(phone: str, user_text: str, session: dict):
+    text_lower = user_text.lower()
+    confirmed = (
+        user_text == "confirm_yes" or
+        any(w in text_lower for w in ["confirmer", "confirme", "oui", "yes", "ok", "wah"])
+    )
 
-    d      = context.user_data
-    panier = d.get("panier", [])
+    if not confirmed and user_text != "confirm_no":
+        try:
+            check = ai_client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": 'Réponds uniquement en JSON: {"confirmed": true} si le message confirme une commande, {"confirmed": false} sinon.'},
+                    {"role": "user", "content": user_text}
+                ],
+                response_format={"type": "json_object"}
+            )
+            result    = json.loads(check.choices[0].message.content)
+            confirmed = result.get("confirmed", False)
+        except Exception:
+            confirmed = False
+
+    panier = session.get("panier", [])
 
     if confirmed and panier:
-        total = sum(item["prix"] for item in panier)
+        total     = sum(item["prix"] for item in panier)
         items_doc = [
             {
                 "product":  ObjectId(item["id"]) if item.get("id") else None,
@@ -391,11 +440,11 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             order_doc = {
                 "customerInfo": {
-                    "firstName": d.get("prenom"),
-                    "lastName":  d.get("nom"),
-                    "phone":     d.get("phone"),
-                    "wilaya":    d.get("wilaya"),
-                    "commune":   d.get("commune"),
+                    "firstName": session.get("prenom"),
+                    "lastName":  session.get("nom"),
+                    "phone":     session.get("phone_client"),
+                    "wilaya":    session.get("wilaya"),
+                    "commune":   session.get("commune"),
                 },
                 "items":         items_doc,
                 "total":         total,
@@ -403,7 +452,7 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "deliveryType":  "home",
                 "deliverySpeed": "express",
                 "status":        "en attente",
-                "source":        "telegram",
+                "source":        "whatsapp",
                 "createdAt":     datetime.utcnow(),
                 "updatedAt":     datetime.utcnow(),
             }
@@ -412,68 +461,122 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Erreur MongoDB : {e}")
 
-        # Notification admin
+        # Notification admin WhatsApp
         try:
-            from telegram import Bot
-            admin_bot = Bot(token=ADMIN_BOT_TOKEN)
             now       = datetime.now().strftime("%d/%m/%Y %H:%M")
             items_txt = "\n".join([f"  • {i['nom']} — {i['prix']} DA" for i in panier])
-            await admin_bot.send_message(
-                chat_id=ADMIN_CHAT_ID,
-                text=(
-                    f"🛍️ *NOUVELLE COMMANDE TINKERBELLS*\n📅 {now}\n\n"
-                    f"🛒 *Produits :*\n{items_txt}\n"
-                    f"💰 *Total : {total} DA*\n\n"
-                    f"👤 *Prénom :* {d.get('prenom')}\n"
-                    f"👤 *Nom :* {d.get('nom')}\n"
-                    f"📱 *Téléphone :* {d.get('phone')}\n"
-                    f"🗺️ *Wilaya :* {d.get('wilaya')}\n"
-                    f"🏘️ *Commune :* {d.get('commune')}"
-                ),
-                parse_mode="Markdown"
+            admin_msg = (
+                f"🛍️ NOUVELLE COMMANDE TINKERBELLS\n📅 {now}\n\n"
+                f"🛒 Produits :\n{items_txt}\n"
+                f"💰 Total : {total} DA\n\n"
+                f"👤 Prénom : {session.get('prenom')}\n"
+                f"👤 Nom : {session.get('nom')}\n"
+                f"📱 Téléphone : {session.get('phone_client')}\n"
+                f"🗺️ Wilaya : {session.get('wilaya')}\n"
+                f"🏘️ Commune : {session.get('commune')}"
             )
+            send_text(ADMIN_PHONE, admin_msg)
         except Exception as e:
-            logger.error(f"Erreur admin : {e}")
+            logger.error(f"Erreur notif admin : {e}")
 
-        await update.message.reply_text(
+        send_text(
+            phone,
             "🎉 Commande confirmée ! Merci pour ta confiance 🌸\n"
             "Notre équipe te contactera très bientôt pour la livraison.\n\n"
             "Tinkerbells — La beauté à votre portée ✨"
         )
     else:
-        await update.message.reply_text("❌ Commande annulée. Tu peux continuer à magasiner 🌸")
+        send_text(phone, "❌ Commande annulée. Tu peux continuer à magasiner 🌸")
 
-    catalog = fetch_catalog()
-    context.user_data.clear()
-    context.user_data["catalog"] = catalog
-    context.user_data["history"] = []
-    context.user_data["panier"]  = []
-    return CHAT
+    reset_session(phone)
+
+# ─────────────────────────────────────────
+# 🌐 WEBHOOK FLASK
+# ─────────────────────────────────────────
+
+@app.route("/webhook", methods=["GET"])
+def verify_webhook():
+    """Vérification du webhook par Meta."""
+    mode      = request.args.get("hub.mode")
+    token     = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        logger.info("✅ Webhook vérifié")
+        return challenge, 200
+    return "Forbidden", 403
+
+
+@app.route("/webhook", methods=["POST"])
+def receive_message():
+    """Réception des messages WhatsApp."""
+    data = request.get_json()
+    logger.info(f"📩 Reçu: {json.dumps(data)}")
+
+    try:
+        entry   = data["entry"][0]
+        changes = entry["changes"][0]
+        value   = changes["value"]
+
+        # Ignorer les statuts de livraison
+        if "statuses" in value:
+            return jsonify({"status": "ok"}), 200
+
+        messages = value.get("messages", [])
+        if not messages:
+            return jsonify({"status": "ok"}), 200
+
+        msg   = messages[0]
+        phone = msg["from"]  # Numéro de l'expéditeur
+
+        # Extraire le texte (message texte ou bouton interactif)
+        if msg["type"] == "text":
+            user_text = msg["text"]["body"]
+        elif msg["type"] == "interactive":
+            interactive = msg["interactive"]
+            if interactive["type"] == "button_reply":
+                user_text = interactive["button_reply"]["id"]
+            else:
+                return jsonify({"status": "ok"}), 200
+        else:
+            send_text(phone, "Je ne comprends que les messages texte pour l'instant 🌸")
+            return jsonify({"status": "ok"}), 200
+
+        session = get_session(phone)
+        state   = session["state"]
+
+        # Message de démarrage
+        if user_text.lower() in ("bonjour", "salut", "hi", "hello", "start", "مرحبا", "ahlan"):
+            reset_session(phone)
+            send_text(
+                phone,
+                "🌸 Bienvenue chez Tinkerbells !\n\nJe suis Mina, votre conseillère beauté 💄\nComment puis-je vous aider ?"
+            )
+            return jsonify({"status": "ok"}), 200
+
+        # Routage selon l'état
+        handlers = {
+            CHAT:          handle_chat,
+            ADD_MORE:      handle_add_more,
+            GET_PRENOM:    handle_get_prenom,
+            GET_NOM:       handle_get_nom,
+            GET_PHONE:     handle_get_phone,
+            GET_WILAYA:    handle_get_wilaya,
+            GET_COMMUNE:   handle_get_commune,
+            CONFIRM_ORDER: handle_confirm_order,
+        }
+        handler = handlers.get(state, handle_chat)
+        handler(phone, user_text, session)
+
+    except Exception as e:
+        logger.error(f"Erreur webhook: {e}")
+
+    return jsonify({"status": "ok"}), 200
 
 # ─────────────────────────────────────────
 # ▶️  LANCEMENT
 # ─────────────────────────────────────────
 
-def main():
-    app  = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        allow_reentry=True,
-        states={
-            CHAT:          [MessageHandler(filters.TEXT & ~filters.COMMAND, chat)],
-            ADD_MORE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, add_more)],
-            GET_PRENOM:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prenom)],
-            GET_NOM:       [MessageHandler(filters.TEXT & ~filters.COMMAND, get_nom)],
-            GET_PHONE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
-            GET_WILAYA:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_wilaya)],
-            GET_COMMUNE:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_commune)],
-            CONFIRM_ORDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_order)],
-        },
-        fallbacks=[CommandHandler("reset", reset)],
-    )
-    app.add_handler(conv)
-    logger.info("✅ Bot Tinkerbells démarré")
-    app.run_polling()
-
 if __name__ == "__main__":
-    main()
+    logger.info("✅ Bot WhatsApp Tinkerbells démarré")
+    app.run(host="0.0.0.0", port=5000, debug=False)
