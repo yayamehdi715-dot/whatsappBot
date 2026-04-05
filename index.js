@@ -6,6 +6,7 @@
 import pkg from '@whiskeysockets/baileys';
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, Browsers } = pkg;
 import { Boom } from '@hapi/boom';
+import pino from 'pino';
 import { MongoClient, ObjectId } from 'mongodb';
 import OpenAI from 'openai';
 import express from 'express';
@@ -517,9 +518,15 @@ async function connectWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
   sock = makeWASocket({
-    auth:               state,
-    browser:            Browsers.ubuntu('Tinkerbells Bot'),
-    printQRInTerminal:  true,
+    auth:                           state,
+    browser:                        ['Ubuntu', 'Chrome', '22.0.0'],
+    printQRInTerminal:              true,
+    logger:                         pino({ level: 'silent' }),
+    syncFullHistory:                false,
+    generateHighQualityLinkPreview: false,
+    connectTimeoutMs:               60_000,
+    keepAliveIntervalMs:            10_000,
+    retryRequestDelayMs:            2_000,
   });
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
